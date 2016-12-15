@@ -1,3 +1,18 @@
+#region HEADER_JC_DOC
+# ------------------------------------------------------------
+# Filename    : cNTFSPermissionEntry.psm1
+# Keywords    : DSC, ACLs, PERMISSIONS, INHERITANCE
+# Description : DSC - Apply permissions to folders, files, and inheritance
+# Version     : 2.0.0 Based on 'https://github.com/SNikalaichyk/cNtfsAccessControl'
+# Date        : 15-Dec-2016
+# ------------------------------------------------------------
+# by Juan Carlos Ruiz, juancarlosruizlopez@outlook.com
+# ------------------------------------------------------------
+#
+#endregion
+
+
+
 #requires -Version 4.0 -Modules CimCmdlets
 
 Set-StrictMode -Version Latest
@@ -11,40 +26,56 @@ function Get-TargetResource
     [OutputType([Hashtable])]
     param
     (
-        [Parameter(Mandatory = $true)]        [String]        $Path,                        # JC. The Path (Filename or Foldername), but now allowing env vars
-        [Parameter(Mandatory = $true)]        [String]        $Principal,                   # The user ID
-        [Parameter(Mandatory = $false)]       [bool]          $AllowInexistent=$false,      # JC. If Principal or Path do not exist, IGNORE, NO ERRORS.
-		[Parameter(Mandatory = $false)]       [string]        $LoggingFile=$null            # JC. If provided, a filename where to log errors (besides DSC log)
+        [Parameter(Mandatory = $true)]  [String]  $Path,                        # JC. The Path (Filename or Foldername), but now allowing env vars
+        [Parameter(Mandatory = $true)]  [String]  $Principal,                   # The user ID
+        [Parameter(Mandatory = $false)] [bool]    $AllowInexistent=$false,      # JC. If Principal not found, IGNORE, NO ERRORS.
+		[Parameter(Mandatory = $false)] [string]  $LoggingFile=$null            # JC. If provided, a filename where to log errors (besides DSC log)
 		
     )
+	
 
+    $ReturnValue = @{
+						Ensure = "Absent"
+						Path = $Path
+						Principal = $Principal
+					    Results = "TBD"
+                    }
 
 	$RealPath = TranslateEnvs $Path                                                        # JC. Allow ENVVARS inside of path 
 
 	$Exists = Test-Path $RealPath
+	
+	if (!$Exists)
+	{
+		        ##  If the PATH does not exist, no matter if allow inexistent
+			    $ReturnValue.Results = "$Path not found"
+			    return $ReturnValue
+ 
+	}
 
+	$Acl = $null
+	try { $Acl = Get-Acl -Path $RealPath } catch {}                                          
 
-    $Acl = Get-Acl -Path $RealPath                                          -ErrorAction Stop
+    if ($Acl -is [System.Security.AccessControl.DirectorySecurity] )  { $ItemType = 'Directory' }
+	if ($Acl -is [System.Security.AccessControl.FileSecurity]      )  { $ItemType = 'File' }
 
-    if ($Acl -is [System.Security.AccessControl.DirectorySecurity])
-    {
-        $ItemType = 'Directory'
-    }
-    else
-    {
-        $ItemType = 'File'
-    }
+	# Future : Registry, Services ...
+	# http://blogs.msmvps.com/erikr/2007/09/26/set-permissions-on-a-specific-service-windows/
+	# sc.exe : sc sdshow serviceName
 
-    $Identity = Resolve-IdentityReference -Identity $Principal  
+	
+
+    $Identity = Resolve-IdentityReference -Identity $Principal  -AllowInexistent $AllowInexistent -LoggingFile $LoggingFile 
 
 	if (-not $Identity)
 	{
-		## User does not exist
-
-
+		## User or group was not found
+        $ReturnValue.Results = "$Identity not found"
+	    return $ReturnValue
 	}
 
 
+	## // Both found.
 
     [System.Security.AccessControl.FileSystemAccessRule[]]$AccessRules = @(
         $Acl.Access |
@@ -109,9 +140,14 @@ function Test-TargetResource
         [Parameter(Mandatory = $true)]        [String]        $Path,
         [Parameter(Mandatory = $false)]        [ValidateSet('Directory', 'File')]        [String]        $ItemType,
         [Parameter(Mandatory = $true)]        [String]        $Principal,
-        [Parameter(Mandatory = $false)]        [Microsoft.Management.Infrastructure.CimInstance[]]        $AccessControlInformation
+        [Parameter(Mandatory = $false)]        [Microsoft.Management.Infrastructure.CimInstance[]]        $AccessControlInformation,
+
+        [Parameter(Mandatory = $false)] [bool]    $AllowInexistent=$false,      # JC. If Principal not found, IGNORE, NO ERRORS.
+		[Parameter(Mandatory = $false)] [string]  $LoggingFile=$null            # JC. If provided, a filename where to log errors (besides DSC log)
+
     )
 
+	<#
     $PSBoundParameters.GetEnumerator() |
     ForEach-Object -Begin {
         $Width = $PSBoundParameters.Keys.Length | Sort-Object | Select-Object -Last 1
@@ -119,6 +155,7 @@ function Test-TargetResource
         "{0,-$($Width)} : '{1}'" -f $_.Key, ($_.Value -join ', ') |
         Write-Verbose
     }
+	#>
 
     if ($PSBoundParameters.ContainsKey('ItemType'))
     {
@@ -127,18 +164,33 @@ function Test-TargetResource
 
     $InDesiredState = $true
 
-    $Acl = Get-Acl -Path $Path -ErrorAction Stop
+	$RealPath = TranslateEnvs $Path                                                        # JC. Allow ENVVARS inside of path 
 
-    if ($Acl -is [System.Security.AccessControl.DirectorySecurity])
-    {
-        $ItemType = 'Directory'
-    }
-    else
-    {
-        $ItemType = 'File'
-    }
+	$Exists = Test-Path $RealPath
+	
+	if (!$Exists)
+	{
+		        ##  If the PATH does not exist, no matter if allow inexistent
+			   return $False
+ 
+	}
 
-    $Identity = Resolve-IdentityReference -Identity $Principal -ErrorAction Stop
+
+
+	$Acl = $null
+	try { $Acl = Get-Acl -Path $RealPath } catch {}                                          
+
+    if ($Acl -is [System.Security.AccessControl.DirectorySecurity] )  { $ItemType = 'Directory' }
+	if ($Acl -is [System.Security.AccessControl.FileSecurity]      )  { $ItemType = 'File' }
+
+
+
+    $Identity = Resolve-IdentityReference -Identity $Principal  -AllowInexistent $AllowInexistent -LoggingFile $LoggingFile 
+    if (-not $Identity)
+	{
+		## User or group was not found
+	    return $false
+	}
 
     [System.Security.AccessControl.FileSystemAccessRule[]]$AccessRules = @(
         $Acl.Access |
@@ -342,26 +394,47 @@ function Set-TargetResource
         [Parameter(Mandatory = $true)]        [String]        $Path,
         [Parameter(Mandatory = $false)]        [ValidateSet('Directory', 'File')]        [String]        $ItemType,
         [Parameter(Mandatory = $true)]        [String]        $Principal,
-        [Parameter(Mandatory = $false)]        [Microsoft.Management.Infrastructure.CimInstance[]]        $AccessControlInformation
+        [Parameter(Mandatory = $false)]        [Microsoft.Management.Infrastructure.CimInstance[]]        $AccessControlInformation,
+
+		[Parameter(Mandatory = $false)] [bool]    $AllowInexistent=$false,      # JC. If Principal not found, IGNORE, NO ERRORS.
+		[Parameter(Mandatory = $false)] [string]  $LoggingFile=$null            # JC. If provided, a filename where to log errors (besides DSC log)
+		
     )
 
 
-    $RealPath = TranslateEnvs $Path                                                        # JC. Allow ENVVARS inside of path 
+	$RealPath = TranslateEnvs $Path                                                        # JC. Allow ENVVARS inside of path 
 
 	$Exists = Test-Path $RealPath
+	
+	if (!$Exists)
+	{
+		Write-Error "Folder $RealPath does not exist"
+	    return 
+	}
 
-    $Acl = Get-Acl -Path $RealPath  
+	$Acl = $null
+	try { $Acl = Get-Acl -Path $RealPath } catch {}                                          
 
-    if ($Acl -is [System.Security.AccessControl.DirectorySecurity])
-    {
-        $ItemType = 'Directory'
-    }
-    else
-    {
-        $ItemType = 'File'
-    }
+    if ($Acl -is [System.Security.AccessControl.DirectorySecurity] )  { $ItemType = 'Directory' }
+	if ($Acl -is [System.Security.AccessControl.FileSecurity]      )  { $ItemType = 'File' }
 
-    $Identity = Resolve-IdentityReference -Identity $Principal -ErrorAction Stop
+
+    $Identity = Resolve-IdentityReference -Identity $Principal  -AllowInexistent $AllowInexistent -LoggingFile $LoggingFile 
+    if (-not $Identity)
+	{
+		## User or group was not found
+	    if (! $AllowInexistent) 
+		{
+		   Write-Error "Folder $RealPath does not exist"
+	    }
+		return 
+		
+	}
+
+
+
+	# Found
+
 
     [System.Security.AccessControl.FileSystemAccessRule[]]$AccessRules = @(
         $Acl.Access |
@@ -796,12 +869,13 @@ function Set-FileSystemAccessControl
 
 
 
+# ------------------------------------------------------------------------------------------
 
 function Resolve-IdentityReference
 {
     <#
     .SYNOPSIS
-        Resolves the identity of the principal.
+        Resolves the identity of the principal (user or group)
 
     .DESCRIPTION
         The Resolve-IdentityReference function resolves the identity of the principal
@@ -809,66 +883,93 @@ function Resolve-IdentityReference
 
     .PARAMETER Identity
         Specifies the identity of the principal.
+
+	.PARAMETER AllowInexistent
+	    If TRUE, we allow inexistent identities (avoid errors)
+
+	.PARAMETER LoggingFile
+	    Errors are sent to this file if not $null
+
     #>
     [CmdletBinding()]
     param
     (
         [Parameter(Mandatory = $true, ValueFromPipeline = $true)]        [ValidateNotNullOrEmpty()]        [String]        $Identity,
-		[Parameter(Mandatory = $false)]       [bool]          $AllowInexistent=$false,      # JC. If Principal or Path do not exist, IGNORE, NO ERRORS.
+		[Parameter(Mandatory = $false)]       [bool]          $AllowInexistent=$false,      # JC. If Principal do not exist, IGNORE, NO ERRORS.
 		[Parameter(Mandatory = $false)]       [string]        $LoggingFile=$null            # JC. If provided, a filename where to log errors (besides DSC log)
 		
     )
     process
     {
-        try
-        {
+ 
             Write-Verbose -Message "Resolving identity reference '$Identity'."
 
             if ($Identity -match '^S-\d-(\d+-){1,14}\d+$')
             {
+				## Domain SID passed
                 [System.Security.Principal.SecurityIdentifier]$Identity = $Identity
             }
             else
             {
+				## Others
                 [System.Security.Principal.NTAccount]$Identity = $Identity
             }
 
-            $SID = $Identity.Translate([System.Security.Principal.SecurityIdentifier])
-            $NTAccount = $SID.Translate([System.Security.Principal.NTAccount])
 
+			$ok = $true
+			try
+			{
+              $SID = $Identity.Translate([System.Security.Principal.SecurityIdentifier])
+              $NTAccount = $SID.Translate([System.Security.Principal.NTAccount])
+			}
+			catch
+			{
+               $TranslateErrorMessage = $_.Exception.Message
+               $ok = $false
+			}
+		
+
+	    if ($ok)
+	    {
+			
             $OutputObject = [PSCustomObject]@{
-                Name = $NTAccount.Value
-                SID = $SID.Value
-            }
-
-            return $OutputObject
+                                                 Name = $NTAccount.Value
+                                                 SID = $SID.Value
+                                             }
+			return $OutputObject
         }
-        catch
+        else
         {
-            $ErrorMessage = "Could not resolve identity reference '{0}': '{1}'." -f $Identity, $_.Exception.Message
-
-			# If error
-            # Write-Error -Exception $_.Exception -Message $ErrorMessage
-            return
+            $ErrorMessage = "Could not resolve identity reference '{0}': '{1}'." -f $Identity, $TranslateErrorMessage
         }
-    }
+	   
+	    if ($AllowInexistent) { return }
+
+
+	    # If errors are reported
+        Write-Error -Exception $_.Exception -Message $ErrorMessage
+        return
+        }
+	 
+    
 }
 
 
 
 # --------------------------------------------------------------------------------------------------- JC 15-Dec-2016
 
-Function TranslateEnvs ([string]$PossiblePath)                                                        # JC. Allow ENVVARS inside of path 
+Function TranslateEnvs ([string]$PossiblePath)                                                        # JC. Allowing ENVVARS inside of path 
 {
 	# The Path received from caller must be '%windir%\logs', for example... but only between single quotes
 
 
+	## TBD Catch possible errors
 
-
-
-	return $PossiblePath
+	return [system.environment]::ExpandEnvironmentVariables($PossiblePath)
+ 
 }
 
+# ---------------------------------------------------------------------------------------------------------------------------------------
 
 
 

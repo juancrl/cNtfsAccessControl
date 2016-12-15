@@ -17,6 +17,7 @@ The **cNtfsPermissionEntry** DSC resource provides a mechanism to manage NTFS pe
     If the **AccessControlInformation** property is not specified, the default permission entry is used as the reference permission entry.
     If this property is set to `Absent` and the **AccessControlInformation** property is not specified, all explicit permissions associated with the specified principal are removed.
 * **Path**: Indicates the path to the target item.
+*      Path can now be a fixed folder (C:\Windows) or based on an environment variable in old CMD-like syntax (%windir%\logs) 
 * **Principal**: Indicates the identity of the principal. Valid formats are:
     * [Down-Level Logon Name](https://msdn.microsoft.com/en-us/library/windows/desktop/aa380525%28v=vs.85%29.aspx#down_level_logon_name)
     * [Security Accounts Manager (SAM) Account Name (sAMAccountName)](https://msdn.microsoft.com/en-us/library/windows/desktop/ms679635%28v=vs.85%29.aspx)
@@ -49,6 +50,11 @@ The **cNtfsPermissionsInheritance** DSC resource provides a mechanism to manage 
     The default value is `$false`. **Note:** This property is only valid when the **Enabled** property is set to `$false`.
 
 ## Versions
+
+
+### 1.3.1 (15-dec-2016)
+
+   Adding ...
 
 ### 1.3.0 (May 04, 2016)
 
