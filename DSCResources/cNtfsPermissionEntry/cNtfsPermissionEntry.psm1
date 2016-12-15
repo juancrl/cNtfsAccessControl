@@ -2,22 +2,29 @@
 
 Set-StrictMode -Version Latest
 
+
+# -------------------------------------------------------------------------------------------- GET
+
 function Get-TargetResource
 {
     [CmdletBinding()]
     [OutputType([Hashtable])]
     param
     (
-        [Parameter(Mandatory = $true)]
-        [String]
-        $Path,
-
-        [Parameter(Mandatory = $true)]
-        [String]
-        $Principal
+        [Parameter(Mandatory = $true)]        [String]        $Path,                        # JC. The Path (Filename or Foldername), but now allowing env vars
+        [Parameter(Mandatory = $true)]        [String]        $Principal,                   # The user ID
+        [Parameter(Mandatory = $false)]       [bool]          $AllowInexistent=$false,      # JC. If Principal or Path do not exist, IGNORE, NO ERRORS.
+		[Parameter(Mandatory = $false)]       [string]        $LoggingFile=$null            # JC. If provided, a filename where to log errors (besides DSC log)
+		
     )
 
-    $Acl = Get-Acl -Path $Path -ErrorAction Stop
+
+	$RealPath = TranslateEnvs $Path                                                        # JC. Allow ENVVARS inside of path 
+
+	$Exists = Test-Path $RealPath
+
+
+    $Acl = Get-Acl -Path $RealPath                                          -ErrorAction Stop
 
     if ($Acl -is [System.Security.AccessControl.DirectorySecurity])
     {
@@ -28,7 +35,16 @@ function Get-TargetResource
         $ItemType = 'File'
     }
 
-    $Identity = Resolve-IdentityReference -Identity $Principal -ErrorAction Stop
+    $Identity = Resolve-IdentityReference -Identity $Principal  
+
+	if (-not $Identity)
+	{
+		## User does not exist
+
+
+	}
+
+
 
     [System.Security.AccessControl.FileSystemAccessRule[]]$AccessRules = @(
         $Acl.Access |
@@ -80,33 +96,20 @@ function Get-TargetResource
     return $ReturnValue
 }
 
+
+# -------------------------------------------------------------------------------------------------------------- TEST
+
 function Test-TargetResource
 {
     [CmdletBinding()]
     [OutputType([Boolean])]
     param
     (
-        [Parameter(Mandatory = $false)]
-        [ValidateSet('Absent', 'Present')]
-        [String]
-        $Ensure = 'Present',
-
-        [Parameter(Mandatory = $true)]
-        [String]
-        $Path,
-
-        [Parameter(Mandatory = $false)]
-        [ValidateSet('Directory', 'File')]
-        [String]
-        $ItemType,
-
-        [Parameter(Mandatory = $true)]
-        [String]
-        $Principal,
-
-        [Parameter(Mandatory = $false)]
-        [Microsoft.Management.Infrastructure.CimInstance[]]
-        $AccessControlInformation
+        [Parameter(Mandatory = $false)]        [ValidateSet('Absent', 'Present')]        [String]        $Ensure = 'Present',
+        [Parameter(Mandatory = $true)]        [String]        $Path,
+        [Parameter(Mandatory = $false)]        [ValidateSet('Directory', 'File')]        [String]        $ItemType,
+        [Parameter(Mandatory = $true)]        [String]        $Principal,
+        [Parameter(Mandatory = $false)]        [Microsoft.Management.Infrastructure.CimInstance[]]        $AccessControlInformation
     )
 
     $PSBoundParameters.GetEnumerator() |
@@ -327,35 +330,27 @@ function Test-TargetResource
     return $InDesiredState
 }
 
+
+
+# ------------------------------------------------------------------------------------------------ SET
 function Set-TargetResource
 {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param
     (
-        [Parameter(Mandatory = $false)]
-        [ValidateSet('Absent', 'Present')]
-        [String]
-        $Ensure = 'Present',
-
-        [Parameter(Mandatory = $true)]
-        [String]
-        $Path,
-
-        [Parameter(Mandatory = $false)]
-        [ValidateSet('Directory', 'File')]
-        [String]
-        $ItemType,
-
-        [Parameter(Mandatory = $true)]
-        [String]
-        $Principal,
-
-        [Parameter(Mandatory = $false)]
-        [Microsoft.Management.Infrastructure.CimInstance[]]
-        $AccessControlInformation
+        [Parameter(Mandatory = $false)]        [ValidateSet('Absent', 'Present')]        [String]        $Ensure = 'Present',
+        [Parameter(Mandatory = $true)]        [String]        $Path,
+        [Parameter(Mandatory = $false)]        [ValidateSet('Directory', 'File')]        [String]        $ItemType,
+        [Parameter(Mandatory = $true)]        [String]        $Principal,
+        [Parameter(Mandatory = $false)]        [Microsoft.Management.Infrastructure.CimInstance[]]        $AccessControlInformation
     )
 
-    $Acl = Get-Acl -Path $Path -ErrorAction Stop
+
+    $RealPath = TranslateEnvs $Path                                                        # JC. Allow ENVVARS inside of path 
+
+	$Exists = Test-Path $RealPath
+
+    $Acl = Get-Acl -Path $RealPath  
 
     if ($Acl -is [System.Security.AccessControl.DirectorySecurity])
     {
@@ -521,6 +516,11 @@ function Set-TargetResource
     Set-FileSystemAccessControl -Path $Path -Acl $Acl
 }
 
+
+
+
+# ---------------------------------------------------------------------------------------------------------------------------
+
 #region Helper Functions
 
 function ConvertFrom-FileSystemAccessRule
@@ -541,14 +541,8 @@ function ConvertFrom-FileSystemAccessRule
     [CmdletBinding()]
     param
     (
-        [Parameter(Mandatory = $true)]
-        [ValidateSet('Directory', 'File')]
-        [String]
-        $ItemType,
-
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
-        [System.Security.AccessControl.FileSystemAccessRule]
-        $InputObject
+        [Parameter(Mandatory = $true)]        [ValidateSet('Directory', 'File')]        [String]        $ItemType,
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]        [System.Security.AccessControl.FileSystemAccessRule]        $InputObject
     )
     process
     {
@@ -799,6 +793,10 @@ function Set-FileSystemAccessControl
     }
 }
 
+
+
+
+
 function Resolve-IdentityReference
 {
     <#
@@ -815,10 +813,10 @@ function Resolve-IdentityReference
     [CmdletBinding()]
     param
     (
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
-        [ValidateNotNullOrEmpty()]
-        [String]
-        $Identity
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]        [ValidateNotNullOrEmpty()]        [String]        $Identity,
+		[Parameter(Mandatory = $false)]       [bool]          $AllowInexistent=$false,      # JC. If Principal or Path do not exist, IGNORE, NO ERRORS.
+		[Parameter(Mandatory = $false)]       [string]        $LoggingFile=$null            # JC. If provided, a filename where to log errors (besides DSC log)
+		
     )
     process
     {
@@ -848,10 +846,31 @@ function Resolve-IdentityReference
         catch
         {
             $ErrorMessage = "Could not resolve identity reference '{0}': '{1}'." -f $Identity, $_.Exception.Message
-            Write-Error -Exception $_.Exception -Message $ErrorMessage
+
+			# If error
+            # Write-Error -Exception $_.Exception -Message $ErrorMessage
             return
         }
     }
 }
+
+
+
+# --------------------------------------------------------------------------------------------------- JC 15-Dec-2016
+
+Function TranslateEnvs ([string]$PossiblePath)                                                        # JC. Allow ENVVARS inside of path 
+{
+	# The Path received from caller must be '%windir%\logs', for example... but only between single quotes
+
+
+
+
+
+	return $PossiblePath
+}
+
+
+
+
 
 #endregion
