@@ -1,26 +1,38 @@
-#requires -Version 4.0
+#region HEADER_JC_DOC
+# ------------------------------------------------------------
+# Filename    : cNTFSPermissionsInheritance.psm1
+# Keywords    : DSC, ACLs, PERMISSIONS, INHERITANCE
+# Description : DSC - Apply permissions to folders, files, and inheritance
+# Version     : 2.0.0 Based on 'https://github.com/SNikalaichyk/cNtfsAccessControl'
+#               http://github.com/juancrl
+# Date        : 16-Dec-2016
+# ------------------------------------------------------------
+# by Juan Carlos Ruiz, juancarlosruizlopez@outlook.com
+# ------------------------------------------------------------
+#
+#endregion
 
+
+#requires -Version 4.0
 Set-StrictMode -Version Latest
 
-function Get-TargetResource
+#region GET
+# -------------------------------------------------------------------------------------------- GET ----------------------------------------
+
+# -----------------------------------------------------------------------------------
+Function Get-TargetResource
+# -----------------------------------------------------------------------------------
 {
     [CmdletBinding()]
     [OutputType([Hashtable])]
     param
     (
-        [Parameter(Mandatory = $true)]
-        [String]
-        $Path,
-
-        [Parameter(Mandatory = $false)]
-        [Boolean]
-        $Enabled = $true,
-
-        [Parameter(Mandatory = $false)]
-        [Boolean]
-        $PreserveInherited = $true
+        [Parameter(Mandatory = $true)]        [String]        $Path,
+        [Parameter(Mandatory = $false)]        [Boolean]        $Enabled = $true,
+        [Parameter(Mandatory = $false)]        [Boolean]        $PreserveInherited = $true
     )
 
+<#
     $PSBoundParameters.GetEnumerator() |
     ForEach-Object -Begin {
         $Width = $PSBoundParameters.Keys.Length | Sort-Object | Select-Object -Last 1
@@ -28,22 +40,32 @@ function Get-TargetResource
         "{0,-$($Width)} : '{1}'" -f $_.Key, ($_.Value -join ', ') |
         Write-Verbose
     }
+#>
 
-    $Acl = Get-Acl -Path $Path -ErrorAction Stop
+    $RealPath = TranslateEnvs $Path
 
-    $EnabledResult = $Acl.AreAccessRulesProtected -eq $false
+	$Acl = $null
+	try { $Acl = Get-Acl -Path $RealPath } catch {}
 
-    if ($EnabledResult -eq $true)
+    if (!$Acl)
     {
-        Write-Verbose -Message "Permissions inheritance is enabled on path '$Path'."
+        return  @{}
+    }
+                                          
+
+    [bool]$EnabledResult = -not ($Acl.AreAccessRulesProtected)
+
+    if ($EnabledResult)
+    {
+        Write-Verbose -Message "Permissions inheritance is enabled on path '$RealPath'."
     }
     else
     {
-        Write-Verbose -Message "Permissions inheritance is disabled on path '$Path'."
+        Write-Verbose -Message "Permissions inheritance is disabled on path '$RealPath'."
     }
 
     $ReturnValue = @{
-        Path = $Path
+        Path = $RealPath
         Enabled = $EnabledResult
         PreserveInherited = $PreserveInherited
     }
@@ -51,30 +73,32 @@ function Get-TargetResource
     return $ReturnValue
 }
 
-function Test-TargetResource
+#endregion
+
+
+
+
+#region TEST
+# -------------------------------------------------------------------------------------------- TEST ---------------------------------------
+
+# -----------------------------------------------------------------------------------
+Function Test-TargetResource
+# -----------------------------------------------------------------------------------
 {
     [CmdletBinding()]
     [OutputType([Boolean])]
     param
     (
-        [Parameter(Mandatory = $true)]
-        [String]
-        $Path,
-
-        [Parameter(Mandatory = $false)]
-        [Boolean]
-        $Enabled = $true,
-
-        [Parameter(Mandatory = $false)]
-        [Boolean]
-        $PreserveInherited = $true
+        [Parameter(Mandatory = $true)]   [String]  $Path,
+        [Parameter(Mandatory = $false)]  [Boolean] $Enabled = $true,
+        [Parameter(Mandatory = $false)]  [Boolean] $PreserveInherited = $true
     )
 
     $TargetResource = Get-TargetResource @PSBoundParameters
 
-    $InDesiredState = $Enabled -eq $TargetResource.Enabled
+    [bool]$InDesiredState = $TargetResource.Enabled
 
-    if ($InDesiredState -eq $true)
+    if ($InDesiredState)
     {
         Write-Verbose -Message 'The target resource is already in the desired state. No action is required.'
     }
@@ -85,30 +109,39 @@ function Test-TargetResource
 
     return $InDesiredState
 }
+#endregion
 
-function Set-TargetResource
+
+#region SET
+# --------------------------------------------------------------------------------------------- SET ---------------------------------------
+# -----------------------------------------------------------------------------------
+Function Set-TargetResource
+# -----------------------------------------------------------------------------------
 {
     [CmdletBinding(SupportsShouldProcess = $true)]
     param
     (
-        [Parameter(Mandatory = $true)]
-        [String]
-        $Path,
-
-        [Parameter(Mandatory = $false)]
-        [Boolean]
-        $Enabled = $true,
-
-        [Parameter(Mandatory = $false)]
-        [Boolean]
-        $PreserveInherited = $true
+        [Parameter(Mandatory = $true)]   [String]   $Path,
+        [Parameter(Mandatory = $false)]  [Boolean]  $Enabled = $true,
+        [Parameter(Mandatory = $false)]  [Boolean]  $PreserveInherited = $true
     )
 
-    $Acl = Get-Acl -Path $Path -ErrorAction Stop
+	$RealPath = TranslateEnvs $Path                                                        # JC. Allow ENVVARS inside of path 
+	$Exists = Test-Path $RealPath
+
+
+	$Acl = $null
+	try { $Acl = Get-Acl -Path $RealPath } catch {}                                          
+
+    if (! $Acl) {
+                  Write-Error "$RealPath not found" 
+                  return 
+                }
+
 
     if ($Enabled -eq $false)
     {
-        Write-Verbose -Message "Disabling permissions inheritance on path '$Path'."
+        Write-Verbose -Message "Disabling permissions inheritance on path '$RealPath'."
 
         if ($PreserveInherited -eq $true)
         {
@@ -123,17 +156,23 @@ function Set-TargetResource
     }
     else
     {
-        Write-Verbose -Message "Enabling permissions inheritance on path '$Path'."
+        Write-Verbose -Message "Enabling permissions inheritance on path '$RealPath'."
 
         $Acl.SetAccessRuleProtection($false, $false)
     }
 
-    Set-FileSystemAccessControl -Path $Path -Acl $Acl
+    Set-FileSystemAccessControl -Path $RealPath -Acl $Acl
 }
 
-#region Helper Functions
+#endregion
 
-function Set-FileSystemAccessControl
+
+#region Helper Functions
+# --------------------------------------------------------------------------------------------- HELPERS -----------------------------------
+
+# -----------------------------------------------------------------------------------
+Function Set-FileSystemAccessControl
+# -----------------------------------------------------------------------------------
 {
     <#
     .SYNOPSIS
@@ -178,4 +217,25 @@ function Set-FileSystemAccessControl
     }
 }
 
+
+# -----------------------------------------------------------------------------------
+Function TranslateEnvs ([string]$PossiblePath)                                      # JC. 16-Dec-2016 - Allowing ENVVARS inside of path 
+# -----------------------------------------------------------------------------------
+{
+	# The Path received from caller can be '%windir%\logs', for example... 
+	
+	## TBD Catch possible errors
+
+	return [system.environment]::ExpandEnvironmentVariables($PossiblePath)
+ 
+}
+
+
+# -----------------------------------------------------------------------------------
 #endregion
+
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------
+Export-ModuleMember -Function *-TargetResource
+

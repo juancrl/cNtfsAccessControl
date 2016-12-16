@@ -4,7 +4,8 @@
 # Keywords    : DSC, ACLs, PERMISSIONS, INHERITANCE
 # Description : DSC - Apply permissions to folders, files, and inheritance
 # Version     : 2.0.0 Based on 'https://github.com/SNikalaichyk/cNtfsAccessControl'
-# Date        : 15-Dec-2016
+#               http://github.com/juancrl
+# Date        : 16-Dec-2016
 # ------------------------------------------------------------
 # by Juan Carlos Ruiz, juancarlosruizlopez@outlook.com
 # ------------------------------------------------------------
@@ -14,50 +15,77 @@
 
 
 #requires -Version 4.0 -Modules CimCmdlets
-
 Set-StrictMode -Version Latest
 
+#region GET
+# -------------------------------------------------------------------------------------------- GET ----------------------------------------
 
-# -------------------------------------------------------------------------------------------- GET
-
-function Get-TargetResource
+# -----------------------------------------------------------------------------------
+Function Get-TargetResource
+# -----------------------------------------------------------------------------------
 {
     [CmdletBinding()]
-    [OutputType([Hashtable])]
+    [OutputType([System.Collections.Hashtable])]
     param
     (
-        [Parameter(Mandatory = $true)]  [String]  $Path,                        # JC. The Path (Filename or Foldername), but now allowing env vars
-        [Parameter(Mandatory = $true)]  [String]  $Principal,                   # The user ID
-        [Parameter(Mandatory = $false)] [bool]    $AllowInexistent=$false,      # JC. If Principal not found, IGNORE, NO ERRORS.
-		[Parameter(Mandatory = $false)] [string]  $LoggingFile=$null            # JC. If provided, a filename where to log errors (besides DSC log)
-		
+        [parameter(Mandatory = $true)]   [System.String]        $Path,
+        [parameter(Mandatory = $true)]   [System.String]        $Principal,
+        [parameter(Mandatory = $false)]  [System.Boolean]        $AllowInexistent,
+        [parameter(Mandatory = $false)]  [System.String]        $LoggingFile
     )
-	
+
+    #Write-Verbose "Use this cmdlet to deliver information about command processing."
+    #Write-Debug "Use this cmdlet to write debug information while troubleshooting."
+
+
+    <#
+    $returnValue = @{
+    Ensure = [System.String]
+    Path = [System.String]
+    ItemType = [System.String]
+    Principal = [System.String]
+    AccessControlInformation = [Microsoft.Management.Infrastructure.CimInstance[]]
+    AllowInexistent = [System.Boolean]
+    LoggingFile = [System.String]
+    }
+
+    $returnValue
+    #>
+
 
     $ReturnValue = @{
 						Ensure = "Absent"
 						Path = $Path
+                                                ItemType = "Unknown"
 						Principal = $Principal
-					    Results = "TBD"
                     }
 
-	$RealPath = TranslateEnvs $Path                                                        # JC. Allow ENVVARS inside of path 
 
+        $ItemType = "Unknown"
+
+	$RealPath = TranslateEnvs $Path                                                        # JC. Allow ENVVARS inside of path 
 	$Exists = Test-Path $RealPath
 	
 	if (!$Exists)
 	{
-		        ##  If the PATH does not exist, no matter if allow inexistent
-			    $ReturnValue.Results = "$Path not found"
-			    return $ReturnValue
+           ##  If the PATH does not exist, you cannot GET-  no matter if allow inexistent
+                            $ReturnValue.Itemtype = "$Path Not Found"
+			    
+                            if ($host.version.major -le 4) { return @{} } else { return $ReturnValue }
  
 	}
+
+        if ($LoggingFile) { "GET :: Folder $RealPath exists. Let's check ACLs" >> $LoggingFile }
 
 	$Acl = $null
 	try { $Acl = Get-Acl -Path $RealPath } catch {}                                          
 
-    if ($Acl -is [System.Security.AccessControl.DirectorySecurity] )  { $ItemType = 'Directory' }
+        if ($Acl -is [System.Security.AccessControl.DirectorySecurity] )  { $ItemType = 'Directory' }
 	if ($Acl -is [System.Security.AccessControl.FileSecurity]      )  { $ItemType = 'File' }
+
+        if ($LoggingFile) { "GET :: Folder $RealPath exists. ACLs checked, it is a $ItemType" >> $LoggingFile }
+
+
 
 	# Future : Registry, Services ...
 	# http://blogs.msmvps.com/erikr/2007/09/26/set-permissions-on-a-specific-service-windows/
@@ -65,23 +93,26 @@ function Get-TargetResource
 
 	
 
-    $Identity = Resolve-IdentityReference -Identity $Principal  -AllowInexistent $AllowInexistent -LoggingFile $LoggingFile 
-
+        $Identity = Resolve-IdentityReference -Identity $Principal  -AllowInexistent $AllowInexistent -LoggingFile $LoggingFile 
 	if (-not $Identity)
 	{
+
 		## User or group was not found
-        $ReturnValue.Results = "$Identity not found"
-	    return $ReturnValue
+
+                if ($LoggingFile) { "GET :: The user $Principal does not exist. Returning" >> $LoggingFile }
+
+                $ReturnValue.Itemtype = "$Principal not found"
+
+                # if ($host.version.major -le 4) { return @{} } else { return $ReturnValue }
+                return $ReturnValue 
+
 	}
 
 
 	## // Both found.
 
     [System.Security.AccessControl.FileSystemAccessRule[]]$AccessRules = @(
-        $Acl.Access |
-        Where-Object -FilterScript {
-            ($_.IsInherited -eq $false) -and
-            ($_.IdentityReference -eq $Identity.Name)
+             $Acl.Access |  Where-Object { (-not $_.IsInherited) -and  ($_.IdentityReference -eq $Identity.Name)
         }
     )
 
@@ -121,42 +152,66 @@ function Get-TargetResource
         Path = $Path
         ItemType = $ItemType
         Principal = $Principal
+        
+        # This property fails in WMF4 ! TBD
+
         AccessControlInformation = [Microsoft.Management.Infrastructure.CimInstance[]]@($CimAccessRules)
     }
 
-    return $ReturnValue
+    if ($host.version.major -le 4) { $ReturnValue.AccessControlInformation = $null }
+
+                # if ($host.version.major -le 4) { return @{} } else { return $ReturnValue }
+                return $ReturnValue 
+
 }
 
+#endregion
 
-# -------------------------------------------------------------------------------------------------------------- TEST
 
-function Test-TargetResource
+#region TEST
+# -------------------------------------------------------------------------------------------- TEST ---------------------------------------
+
+# -----------------------------------------------------------------------------------
+Function Test-TargetResource
+# -----------------------------------------------------------------------------------
 {
     [CmdletBinding()]
-    [OutputType([Boolean])]
+    [OutputType([System.Boolean])]
     param
     (
-        [Parameter(Mandatory = $false)]        [ValidateSet('Absent', 'Present')]        [String]        $Ensure = 'Present',
-        [Parameter(Mandatory = $true)]        [String]        $Path,
-        [Parameter(Mandatory = $false)]        [ValidateSet('Directory', 'File')]        [String]        $ItemType,
-        [Parameter(Mandatory = $true)]        [String]        $Principal,
-        [Parameter(Mandatory = $false)]        [Microsoft.Management.Infrastructure.CimInstance[]]        $AccessControlInformation,
+        [ValidateSet("Present","Absent")]
+        [System.String]
+        $Ensure,
 
-        [Parameter(Mandatory = $false)] [bool]    $AllowInexistent=$false,      # JC. If Principal not found, IGNORE, NO ERRORS.
-		[Parameter(Mandatory = $false)] [string]  $LoggingFile=$null            # JC. If provided, a filename where to log errors (besides DSC log)
+        [parameter(Mandatory = $true)]
+        [System.String]
+        $Path,
 
+        [ValidateSet("Directory","File")]
+        [System.String]
+        $ItemType,
+
+        [parameter(Mandatory = $true)]
+        [System.String]
+        $Principal,
+
+        [Microsoft.Management.Infrastructure.CimInstance[]]
+        $AccessControlInformation,
+
+        [parameter(Mandatory = $false)]
+        [System.Boolean]
+        $AllowInexistent,
+
+        [parameter(Mandatory = $false)]
+        [System.String]
+        $LoggingFile
     )
 
-	<#
-    $PSBoundParameters.GetEnumerator() |
-    ForEach-Object -Begin {
-        $Width = $PSBoundParameters.Keys.Length | Sort-Object | Select-Object -Last 1
-    } -Process {
-        "{0,-$($Width)} : '{1}'" -f $_.Key, ($_.Value -join ', ') |
-        Write-Verbose
-    }
-	#>
+    #Write-Verbose "Use this cmdlet to deliver information about command processing."
 
+    #Write-Debug "Use this cmdlet to write debug information while troubleshooting."
+
+ 
     if ($PSBoundParameters.ContainsKey('ItemType'))
     {
         Write-Verbose -Message 'The ItemType property is deprecated and will be ignored.'
@@ -164,7 +219,12 @@ function Test-TargetResource
 
     $InDesiredState = $true
 
+
+	if ($LoggingFile) { "Test-TargetResource. Received $Path" > $LoggingFile }
+
 	$RealPath = TranslateEnvs $Path                                                        # JC. Allow ENVVARS inside of path 
+
+        if ($LoggingFile) { "Test-TargetResource. Translated to $RealPath"  >> $LoggingFile}
 
 	$Exists = Test-Path $RealPath
 	
@@ -175,29 +235,28 @@ function Test-TargetResource
  
 	}
 
+	if ($LoggingFile) { "Test-TargetResource. OK, $RealPath exists" >> $LoggingFile }
 
 
 	$Acl = $null
 	try { $Acl = Get-Acl -Path $RealPath } catch {}                                          
 
-    if ($Acl -is [System.Security.AccessControl.DirectorySecurity] )  { $ItemType = 'Directory' }
+        if ($Acl -is [System.Security.AccessControl.DirectorySecurity] )  { $ItemType = 'Directory' }
 	if ($Acl -is [System.Security.AccessControl.FileSecurity]      )  { $ItemType = 'File' }
 
 
 
-    $Identity = Resolve-IdentityReference -Identity $Principal  -AllowInexistent $AllowInexistent -LoggingFile $LoggingFile 
+    $Identity = Resolve-IdentityReference -Identity $Principal  -AllowInexistent $AllowInexistent -LoggingFile $LoggingFile
+
     if (-not $Identity)
 	{
-		## User or group was not found
+	    ## User or group was not found
+            ## Decidir
 	    return $false
 	}
 
     [System.Security.AccessControl.FileSystemAccessRule[]]$AccessRules = @(
-        $Acl.Access |
-        Where-Object -FilterScript {
-            ($_.IsInherited -eq $false) -and
-            ($_.IdentityReference -eq $Identity.Name)
-        }
+        $Acl.Access | Where-Object { (-not $_.IsInherited) -and ($_.IdentityReference -eq $Identity.Name) }
     )
 
     Write-Verbose -Message "Current permission entry count : $($AccessRules.Count)"
@@ -213,20 +272,9 @@ function Test-TargetResource
             $Inheritance = $Instance.CimInstanceProperties.Where({$_.Name -eq 'Inheritance'}).ForEach({$_.Value})
             $NoPropagateInherit = $Instance.CimInstanceProperties.Where({$_.Name -eq 'NoPropagateInherit'}).ForEach({$_.Value})
 
-            if (-not $AccessControlType)
-            {
-                $AccessControlType = 'Allow'
-            }
-
-            if (-not $FileSystemRights)
-            {
-                $FileSystemRights = 'ReadAndExecute'
-            }
-
-            if (-not $NoPropagateInherit)
-            {
-                $NoPropagateInherit = $false
-            }
+            if (-not $AccessControlType)    {                $AccessControlType = 'Allow'            }
+            if (-not $FileSystemRights)     {                $FileSystemRights = 'ReadAndExecute'            }
+            if (-not $NoPropagateInherit)   {                $NoPropagateInherit = $false            }
 
             $ReferenceRuleInfo += [PSCustomObject]@{
                 AccessControlType = $AccessControlType
@@ -318,7 +366,6 @@ function Test-TargetResource
         if ($AccessRules.Count -ne $ReferenceRuleInfo.Count)
         {
             Write-Verbose -Message 'The number of current permission entries is different from the number of desired permission entries.'
-
             $InDesiredState = $false
         }
 
@@ -380,42 +427,71 @@ function Test-TargetResource
     }
 
     return $InDesiredState
+
+
 }
 
+#endregion
 
-
-# ------------------------------------------------------------------------------------------------ SET
-function Set-TargetResource
+#region SET
+# --------------------------------------------------------------------------------------------- SET ---------------------------------------
+# -----------------------------------------------------------------------------------
+Function Set-TargetResource
+# -----------------------------------------------------------------------------------
 {
-    [CmdletBinding(SupportsShouldProcess = $true)]
+    [CmdletBinding()]
     param
     (
-        [Parameter(Mandatory = $false)]        [ValidateSet('Absent', 'Present')]        [String]        $Ensure = 'Present',
-        [Parameter(Mandatory = $true)]        [String]        $Path,
-        [Parameter(Mandatory = $false)]        [ValidateSet('Directory', 'File')]        [String]        $ItemType,
-        [Parameter(Mandatory = $true)]        [String]        $Principal,
-        [Parameter(Mandatory = $false)]        [Microsoft.Management.Infrastructure.CimInstance[]]        $AccessControlInformation,
+        [ValidateSet("Present","Absent")]
+        [System.String]
+        $Ensure,
 
-		[Parameter(Mandatory = $false)] [bool]    $AllowInexistent=$false,      # JC. If Principal not found, IGNORE, NO ERRORS.
-		[Parameter(Mandatory = $false)] [string]  $LoggingFile=$null            # JC. If provided, a filename where to log errors (besides DSC log)
-		
+        [parameter(Mandatory = $true)]
+        [System.String]
+        $Path,
+
+        [ValidateSet("Directory","File")]
+        [System.String]
+        $ItemType,
+
+        [parameter(Mandatory = $true)]
+        [System.String]
+        $Principal,
+
+        [Microsoft.Management.Infrastructure.CimInstance[]]
+        $AccessControlInformation,
+
+        [parameter(Mandatory = $false)]
+        [System.Boolean]
+        $AllowInexistent,
+
+        [parameter(Mandatory = $false)]
+        [System.String]
+        $LoggingFile
     )
+
+    #Write-Verbose "Use this cmdlet to deliver information about command processing."
+
+    #Write-Debug "Use this cmdlet to write debug information while troubleshooting."
+
+    #Include this line if the resource requires a system reboot.
+    #$global:DSCMachineStatus = 1
 
 
 	$RealPath = TranslateEnvs $Path                                                        # JC. Allow ENVVARS inside of path 
 
-	$Exists = Test-Path $RealPath
+	$Exists = Test-Path -Path $RealPath
 	
 	if (!$Exists)
 	{
-		Write-Error "Folder $RealPath does not exist"
+	    write-Error "Folder $RealPath does not exist"
 	    return 
 	}
 
 	$Acl = $null
 	try { $Acl = Get-Acl -Path $RealPath } catch {}                                          
 
-    if ($Acl -is [System.Security.AccessControl.DirectorySecurity] )  { $ItemType = 'Directory' }
+        if ($Acl -is [System.Security.AccessControl.DirectorySecurity] )  { $ItemType = 'Directory' }
 	if ($Acl -is [System.Security.AccessControl.FileSecurity]      )  { $ItemType = 'File' }
 
 
@@ -423,12 +499,12 @@ function Set-TargetResource
     if (-not $Identity)
 	{
 		## User or group was not found
-	    if (! $AllowInexistent) 
+	        if (! $AllowInexistent) 
 		{
-		   Write-Error "Folder $RealPath does not exist"
-	    }
-		return 
-		
+		   Write-Error "User $Principal does not exist"
+	        }
+		return @{}                  # Should return nothing
+		 
 	}
 
 
@@ -437,10 +513,7 @@ function Set-TargetResource
 
 
     [System.Security.AccessControl.FileSystemAccessRule[]]$AccessRules = @(
-        $Acl.Access |
-        Where-Object -FilterScript {
-            ($_.IsInherited -eq $false) -and
-            ($_.IdentityReference -eq $Identity.Name)
+        $Acl.Access | Where-Object { (-not $_.IsInherited) -and ($_.IdentityReference -eq $Identity.Name)
         }
     )
 
@@ -457,20 +530,9 @@ function Set-TargetResource
             $Inheritance = $Instance.CimInstanceProperties.Where({$_.Name -eq 'Inheritance'}).ForEach({$_.Value})
             $NoPropagateInherit = $Instance.CimInstanceProperties.Where({$_.Name -eq 'NoPropagateInherit'}).ForEach({$_.Value})
 
-            if (-not $AccessControlType)
-            {
-                $AccessControlType = 'Allow'
-            }
-
-            if (-not $FileSystemRights)
-            {
-                $FileSystemRights = 'ReadAndExecute'
-            }
-
-            if (-not $NoPropagateInherit)
-            {
-                $NoPropagateInherit = $false
-            }
+            if (-not $AccessControlType)     {   $AccessControlType = 'Allow'         }
+            if (-not $FileSystemRights)      {   $FileSystemRights = 'ReadAndExecute' }
+            if (-not $NoPropagateInherit)    {   $NoPropagateInherit = $false         }
 
             $ReferenceRuleInfo += [PSCustomObject]@{
                 AccessControlType = $AccessControlType
@@ -552,8 +614,7 @@ function Set-TargetResource
     {
         if ($AccessRules.Count -ne 0)
         {
-            "Removing all explicit permissions for principal '{0}'." -f $($AccessRules[0].IdentityReference) |
-            Write-Verbose
+            "Removing all explicit permissions for principal '{0}'." -f $($AccessRules[0].IdentityReference) |  Write-Verbose
 
             $Modified = $null
             $Acl.ModifyAccessRule('RemoveAll', $AccessRules[0], [Ref]$Modified)
@@ -586,17 +647,18 @@ function Set-TargetResource
         }
     }
 
-    Set-FileSystemAccessControl -Path $Path -Acl $Acl
+    Set-FileSystemAccessControl -Path $RealPath -Acl $Acl
+
 }
+#endregion
 
-
-
-
-# ---------------------------------------------------------------------------------------------------------------------------
 
 #region Helper Functions
+# --------------------------------------------------------------------------------------------- HELPERS -----------------------------------
 
-function ConvertFrom-FileSystemAccessRule
+# -----------------------------------------------------------------------------------
+Function ConvertFrom-FileSystemAccessRule
+# -----------------------------------------------------------------------------------
 {
     <#
     .SYNOPSIS
@@ -614,8 +676,8 @@ function ConvertFrom-FileSystemAccessRule
     [CmdletBinding()]
     param
     (
-        [Parameter(Mandatory = $true)]        [ValidateSet('Directory', 'File')]        [String]        $ItemType,
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]        [System.Security.AccessControl.FileSystemAccessRule]        $InputObject
+        [Parameter(Mandatory = $true)] [ValidateSet('Directory', 'File')]  [String]        $ItemType,
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]          [System.Security.AccessControl.FileSystemAccessRule]        $InputObject
     )
     process
     {
@@ -632,14 +694,8 @@ function ConvertFrom-FileSystemAccessRule
 
         if ($InheritanceFlags -eq 'None' -and $PropagationFlags -eq 'None')
         {
-            if ($ItemType -eq 'Directory')
-            {
-                $Inheritance = 'ThisFolderOnly'
-            }
-            else
-            {
-                $Inheritance = 'None'
-            }
+            if ($ItemType -eq 'Directory')      {   $Inheritance = 'ThisFolderOnly'        }
+            else                                {   $Inheritance = 'None'                  }
         }
         elseif ($InheritanceFlags -eq 'ContainerInherit, ObjectInherit' -and $PropagationFlags -eq 'None')
         {
@@ -679,7 +735,9 @@ function ConvertFrom-FileSystemAccessRule
     }
 }
 
-function New-FileSystemAccessRule
+# -----------------------------------------------------------------------------------
+Function New-FileSystemAccessRule
+# -----------------------------------------------------------------------------------
 {
     <#
     .SYNOPSIS
@@ -711,26 +769,11 @@ function New-FileSystemAccessRule
     [OutputType([System.Security.AccessControl.FileSystemAccessRule])]
     param
     (
-        [Parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)]
-        [ValidateSet('Directory', 'File')]
-        [String]
-        $ItemType,
-
-        [Parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)]
-        [String]
-        $Principal,
-
-        [Parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)]
-        [ValidateSet('Allow', 'Deny')]
-        [String]
-        $AccessControlType,
-
-        [Parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)]
-        [System.Security.AccessControl.FileSystemRights]
-        $FileSystemRights,
-
-        [Parameter(Mandatory = $false, ValueFromPipelineByPropertyName = $true)]
-        [ValidateSet(
+        [Parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)]  [ValidateSet('Directory', 'File')] [String]  $ItemType,
+	    [Parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)]  [String]   $Principal,
+        [Parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)]  [ValidateSet('Allow', 'Deny')]  [String] $AccessControlType,
+        [Parameter(Mandatory = $true, ValueFromPipelineByPropertyName = $true)]  [System.Security.AccessControl.FileSystemRights]  $FileSystemRights,
+        [Parameter(Mandatory = $false, ValueFromPipelineByPropertyName = $true)] [ValidateSet(
             $null,
             'None',
             'ThisFolderOnly',
@@ -741,12 +784,8 @@ function New-FileSystemAccessRule
             'SubfoldersOnly',
             'FilesOnly'
         )]
-        [String]
-        $Inheritance = 'ThisFolderSubfoldersAndFiles',
-
-        [Parameter(Mandatory = $false, ValueFromPipelineByPropertyName = $true)]
-        [Boolean]
-        $NoPropagateInherit = $false
+        [String]        $Inheritance = 'ThisFolderSubfoldersAndFiles',
+        [Parameter(Mandatory = $false, ValueFromPipelineByPropertyName = $true)]        [Boolean]        $NoPropagateInherit = $false
     )
     process
     {
@@ -821,7 +860,9 @@ function New-FileSystemAccessRule
     }
 }
 
-function Set-FileSystemAccessControl
+# -----------------------------------------------------------------------------------
+Function Set-FileSystemAccessControl
+# -----------------------------------------------------------------------------------
 {
     <#
     .SYNOPSIS
@@ -840,18 +881,12 @@ function Set-FileSystemAccessControl
     [CmdletBinding(SupportsShouldProcess = $true)]
     param
     (
-        [Parameter(Mandatory = $true)]
-        [ValidateScript({Test-Path -Path $_})]
-        [String]
-        $Path,
-
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [System.Security.AccessControl.FileSystemSecurity]
-        $Acl
+        [Parameter(Mandatory = $true)] [ValidateScript({Test-Path -Path $_})]  [String]        $Path,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()]              [System.Security.AccessControl.FileSystemSecurity]        $Acl
     )
 
-    $PathInfo = Resolve-Path -Path $Path -ErrorAction Stop
+
+    $PathInfo = Resolve-Path -Path $Path -ErrorAction Stop       # Stop ?
 
     if ($PSCmdlet.ShouldProcess($Path))
     {
@@ -869,9 +904,9 @@ function Set-FileSystemAccessControl
 
 
 
-# ------------------------------------------------------------------------------------------
-
-function Resolve-IdentityReference
+# -----------------------------------------------------------------------------------
+Function Resolve-IdentityReference
+# -----------------------------------------------------------------------------------
 {
     <#
     .SYNOPSIS
@@ -894,14 +929,13 @@ function Resolve-IdentityReference
     [CmdletBinding()]
     param
     (
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]        [ValidateNotNullOrEmpty()]        [String]        $Identity,
-		[Parameter(Mandatory = $false)]       [bool]          $AllowInexistent=$false,      # JC. If Principal do not exist, IGNORE, NO ERRORS.
-		[Parameter(Mandatory = $false)]       [string]        $LoggingFile=$null            # JC. If provided, a filename where to log errors (besides DSC log)
+      [Parameter(Mandatory = $true, ValueFromPipeline = $true)]        [ValidateNotNullOrEmpty()]        [String]        $Identity,
+	  [Parameter(Mandatory = $false)]                             [bool]    $AllowInexistent=$false,      # JC. If Principal do not exist, IGNORE, NO ERRORS.
+	  [Parameter(Mandatory = $false)]                             [string]  $LoggingFile=$null            # JC. If provided, a filename where to log errors (besides DSC log)
 		
     )
     process
-    {
- 
+    { 
             Write-Verbose -Message "Resolving identity reference '$Identity'."
 
             if ($Identity -match '^S-\d-(\d+-){1,14}\d+$')
@@ -946,7 +980,7 @@ function Resolve-IdentityReference
 	    if ($AllowInexistent) { return }
 
 
-	    # If errors are reported
+	    # If errors must be reported
         Write-Error -Exception $_.Exception -Message $ErrorMessage
         return
         }
@@ -956,12 +990,11 @@ function Resolve-IdentityReference
 
 
 
-# --------------------------------------------------------------------------------------------------- JC 15-Dec-2016
-
-Function TranslateEnvs ([string]$PossiblePath)                                                        # JC. Allowing ENVVARS inside of path 
+# -----------------------------------------------------------------------------------
+Function TranslateEnvs ([string]$PossiblePath)                                      # JC. 16-Dec-2016 - Allowing ENVVARS inside of path 
+# -----------------------------------------------------------------------------------
 {
-	# The Path received from caller must be '%windir%\logs', for example... but only between single quotes
-
+	# The Path received from caller must be '%windir%\logs', for example...  
 
 	## TBD Catch possible errors
 
@@ -969,9 +1002,14 @@ Function TranslateEnvs ([string]$PossiblePath)                                  
  
 }
 
-# ---------------------------------------------------------------------------------------------------------------------------------------
 
-
-
-
+# -----------------------------------------------------------------------------------
 #endregion
+
+
+
+# ---------------------------------------------------------------------------------------------------------------------------------------
+Export-ModuleMember -Function *-TargetResource
+
+
+
